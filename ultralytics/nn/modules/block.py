@@ -2828,7 +2828,7 @@ class RCSFusion(nn.Module):
     ):
         super().__init__()
 
-        self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
+        self.proj = Conv(c1, c2, 1) if c1 != c2 else nn.Identity()
 
         # Detail residual branch.
         self.detail = nn.Sequential(
@@ -2836,20 +2836,6 @@ class RCSFusion(nn.Module):
             Conv(c2, c2, 1, 1),
         )
 
-        # Recall-aware spatial gate.
-        # Input:
-        # avg response, max response, std response, local contrast
-        self.gate = nn.Sequential(
-            nn.Conv2d(4, 16, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(16),
-            nn.SiLU(),
-            nn.Conv2d(16, 1, kernel_size=7, stride=1, padding=3, bias=True),
-            nn.Sigmoid(),
-        )
-
-        # Start from identity behavior.
-        self.alpha = nn.Parameter(torch.zeros(1))
-        self.scale = scale
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.proj(x)
@@ -2866,17 +2852,8 @@ class RCSFusion(nn.Module):
             count_include_pad=False,
         )
 
-        local_contrast = torch.abs(avg_x - smooth_x)
 
-        gate_in = torch.cat(
-            [
-                avg_x,
-                max_x,
-                std_x,
-                local_contrast,
-            ],
-            dim=1,
-        )
+
 
         g = self.gate(gate_in)
 
@@ -2911,20 +2888,6 @@ class LCRB(nn.Module):
             nn.SiLU()
         )
 
-        self.pwconv = nn.Sequential(
-            nn.Conv2d(c2, c2, 1, 1, 0, bias=False),
-            nn.BatchNorm2d(c2),
-            nn.SiLU()
-        )
-
-        # ECA-style channel recalibration, no spatial attention
-        self.eca_pool = nn.AdaptiveAvgPool2d(1)
-        self.eca_conv = nn.Conv1d(1, 1, kernel_size=3, padding=1, bias=False)
-        self.sigmoid = nn.Sigmoid()
-
-        # Zero-initialized residual scale for stable training
-        self.alpha = nn.Parameter(torch.zeros(1))
-
     def forward(self, x):
         x = self.proj(x)
 
@@ -2934,11 +2897,6 @@ class LCRB(nn.Module):
         out = self.dwconv(contrast)
         out = self.pwconv(out)
 
-        # Channel-only recalibration
-        w = self.eca_pool(out).squeeze(-1).transpose(-1, -2)
-        w = self.eca_conv(w)
-        w = self.sigmoid(w.transpose(-1, -2).unsqueeze(-1))
 
-        out = out * w
 
         return x + torch.tanh(self.alpha) * out
